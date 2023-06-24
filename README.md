@@ -54,7 +54,7 @@ Examples:
 
 > Note: This is currently a WIP. Formatting is a bit rigid.
 
-- Wrap Messages w/ a `<!--- start { "role": "OpenAI Role" } --->` & `<!--- stop --->` HTML Comment
+- Wrap Messages w/ a `<!-- start { "role": "OpenAI Role" } -->` & `<!-- stop -->` HTML Comment
   - Pad your messages with a newline between the comments
   - Add metadata to the JSON object in the `start` comment. At a minimum include the OpenAI Role (`system`, `assistant` or `user`).
     - The tool will include a `model` key in the metadata of `assistant` messages: ex `<!-- start {"role": "assistant", "model": "gpt-3.5-turbo-0613"} -->`
