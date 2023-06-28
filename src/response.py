@@ -40,67 +40,32 @@ async def single_shot(
 ### Chain of Thought ###
 
 _cot_framework = """\
-CoT is a framework that enhances an LLM's problem-solving capabilities by employing an ordered sequence of reasoning steps that collectively lead to a comprehensive solution. CoT is broken down into two parts: the External Dialogue (Ext-Di) and the Internal Monologue (Int-Mono). The Ext-Di is the part of the CoT that is visible to the user, while the Int-Mono is the part that is internal to the LLM.
+Chain of Thought (`CoT`) is a framework that enhances an LLM's capabilities by decomposing the prompt & iteratively answering the sub-prompts. CoT is intended to model the human approach to critical thinking. The result of CoT is a more thoughtful, transparent & adaptive response to the prompt.
 
 Here's a schematic outline for applying CoT:
 
-1. Understand & Break Down: Comprehend the user's prompt and decompose the problem into simpler sub-problems. This is part of your internal monologue.
+1. Understand & Break Down: Comprehend the prompt and decompose the prompt into a coarse set of sub-prompts to individually respond to. Explicitly state your reasoning for each decomposition & tie it back to the prompt. Favor Depth First over Breadth First decomposition.
 
-2. Declare What You're Doing: Share with the user the identified sub-problems and why they were formed. This constitutes your external dialogue.
+2. Answer the Sub-prompts: Reflect on and respond to each of the sub-prompts. Each individual response should be clear and concise, including a step-by-step breakdown of your thought process.
 
-3. Solve the Sub-problems: Reflect and solve each of the sub-problems internally (internal monologue).
-
-4. Declare Your Findings: Communicate step-by-step solutions of the sub-problems to the user, creating a clear link between each solution and its corresponding sub-problem. This forms the next part of the external dialogue.
-
-5. Assemble Full Solution & Declare Result: Put together the solutions internally, then present to the user a comprehensive final answer, making sure you highlight connections from the final solution to the component parts. This combines both your external and internal dialogue.
-
-6. Distill the CoT into a Single Response: Finally, distill the CoT into a single response that is salient, concise, and coherent. This is the last part & will be returned to the user.
+3. Craft a Response: Reflect on the sub-prompts and their responses to craft a thoughtful response to the original prompt. Strike a balance between keeping the response concise yet detailed using strategies such as selective detailing to adjust the degree of detail based on complexity.
 """
 
-_cot_internal_monologue_system_message = f"""\
+_cot_system_message = f"""\
+You are a Critical Thinker, highly knowledgable & extremely competent in the task at hand. You are intellectually honest and strive to be precise, accurate & unbiased but readily admit when you don't know enough. You use simple & straightforward language with a concise prose.
+
+Apply Chain of Thought as you respond to the user.
+
 {_cot_framework}
-
-In this breakout chat, your role is to be the 'Internal Monologue' or 'Int-Mono'. As Int-Mono your goal and purpose are to accurately solve the sub-problems provided by Ext-Di, maintain the CoT, give clear reasoning for every step taken, and finally consolidate all the answers to provide a comprehensive final response.
-
-Focus on the following points in the CoT Framework:
-
-- Solve the Sub-problems
-- Declare Your Findings
-- Assemble Full Solution & Declare Result
-"""
-
-_cot_external_dialogue_system_message = f"""\
-{_cot_framework}
-
-In this breakout chat, your role is to be the 'External Dialogue' or 'Ext-Di'. As Ext-Di your goal and purpose are to break down the original prompt into smaller and manageable sub-problems, present them one by one to Int-Mono and finally distill the full solution to match the original prompt. Ensure that the division follows a logical sequence that aligns with the CoT.
-
-Focus on the following points in the CoT Framework:
-
-- Understand & Break Down
-- Declare What You're Doing
-- Distill the CoT into a Single Response
 """
 
 _cot_breakdown_approach = """\
-To breakdown the prompt into sub-tasks you can APPLY one or many of the following strategies:
+- Simplification: Aim at parceling the prompt into easier, more digestible parts.
+- Sequential Approach: Organize sub-prompts in an order that best reflects a logical sequence of steps.
+- Compartimentalization: Separate distinct elements of the prompt as unique sub-prompts.
+- Clearly Defined: Ensure each sub-prompt is well defined, distinct, and precise.
 
-- By Action: Determine actions implied in the prompt and treat each as an individual operation.
-- Through Logical Reasoning: Identify reasoning steps or conditions that contribute to the solution.
-- By Entity: Focus on distinct components or entities involved in the problem.
-- By Time or Sequence: Look at the steps or events in a sequence or timeline.
-- By Detail: Break down by different layers of details or complexity involved.
-- By Structural Part: If the problem has a distinct structural pattern, use it as a guide.
-
-When breaking down the prompt keep the following meta-strategies in mind:
-
-- Simplification: Aim at parceling the problem into easier, more digestible parts.
-- Sequential Approach: Organize sub-tasks in an order that best reflects a logical sequence of solving steps.
-- Compartimentalization: Separate distinct elements of the problem as unique sub-problems.
-- Clearly Defined: Ensure each sub-task is well defined, distinct, and precise.
-- Adaptivity: Choose breakdown strategies best suited for the current problem type or domain.
-- Goal Oriented: Keep in view the final solution while creating sub-tasks.
-
-Remember, the strategies & meta strategies are not mutually exclusive and can be combined in ways to best breakdown the prompt.
+Be adaptive, the meta strategies are not mutually exclusive and can be combined in ways to best breakdown the prompt.
 """
 
 _cot_breakdown_schema = """\
@@ -121,19 +86,32 @@ INSIDE THE FOLLOWING CODE BLOCK IS A TEMPLATE YOU CAN USE TO FORMAT YOUR OUTPUT:
 AGAIN, YOUR OUTPUT MUST EXPLICITLY ADHERE TO THE ABOVE SCHEMA.
 """
 
-# _cot_breakdown_subtask_regex = re.compile(
-#   r"^(\d)+\.\s+([a-zA-Z0-9\s]+)\s*:\s*([a-zA-Z0-9\s\.\,\;\:\!\?]+)$",
-#   re.MULTILINE
-# )
+_cot_breakdown_system_message = f"""\
+You are a Critical Thinker, highly knowledgable & extremely competent in the task at hand. You are intellectually honest and strive to be precise, accurate & unbiased but readily admit when you don't know enough. You use simple & straightforward language with a concise prose.
+
+We are applying Chain of Thought to a prompt.
+
+{_cot_framework}
+
+Your role is to decompose the prompt into **<= 3** sub-prompts using the following approach:
+
+{_cot_breakdown_approach}
+
+Please pay close attention to the following...
+
+{_cot_breakdown_schema}
+"""
+
 _cot_breakdown_subtask_regex = re.compile(
   r"(\d+)\.\s+([^\n:]+):\s+([^\n]+)",
   re.MULTILINE
 )
 
 async def _cot_breakdown(
-  context: list[str],
+  prompt: str,
+  context: str,
   llm: LLM,
-) -> list[tuple[int, str, str]]:
+) -> list[dict[str, str]]:
   """Breakdown the prompt into sub-tasks using the llm."""
   logger.debug("_cot_breakdown")
   logger.debug(f"{_cot_breakdown_approach=}")
@@ -143,19 +121,16 @@ async def _cot_breakdown(
       # System Message
       ChatMessage(
         role='system',
-        content="\n".join([
-          _cot_external_dialogue_system_message,
-          _cot_breakdown_approach,
-        ]),
+        content=_cot_breakdown_system_message,
         model=None,
         metadata={}
       ),
       # CoT Context
       ChatMessage(
         role='user',
-        content='\n'.join([
+        content='\n\n'.join([
           "# Context",
-          *context,
+          context,
         ]),
         model=None,
         metadata={}
@@ -163,10 +138,10 @@ async def _cot_breakdown(
       # Actionable
       ChatMessage(
         role='user',
-        content="\n".join([
-          "# Prompt"
-          "Please deconstruct the prompt into sub-tasks.",
-          _cot_breakdown_schema
+        content="\n\n".join([
+          "# Prompt",
+          "Please deconstruct the following prompt into sub-prompts",
+          f"```markdown{prompt}```",
         ]),
         model=None,
         metadata={}
@@ -176,7 +151,37 @@ async def _cot_breakdown(
   logger.debug(f"{response.content}")
 
   # Extract the sub-tasks from the response using the regex
-  return _cot_breakdown_subtask_regex.findall(response.content)
+  return [
+    {
+      "name": sub_prompt[1],
+      "description": sub_prompt[2],
+    }
+    for sub_prompt in sorted(
+      _cot_breakdown_subtask_regex.findall(response.content),
+      key=lambda t: t[0]
+    )
+  ]
+
+def _cot_render_context(
+  prompt: str,
+  prompt_context: str,
+  sub_prompts: list[dict[str, str]],
+) -> str:
+  """Render the CoT context."""
+  logger.debug("_cot_render_context")
+  return "\n\n".join([
+    f"# Prompt\n\n```markdown{prompt}```",
+    f"# Prompt Context\n\n```markdown{prompt_context}```",
+    f"# Sub-Prompts",
+    *[
+      "\n\n".join([s for s in [
+        f"## {index +1} - {sub_prompt['name']}",
+        f"> {sub_prompt['description']}",
+        f"```markdown\n{sub_prompt['solution']}\n```" if 'solution' in sub_prompt else None,
+      ] if s is not None])
+      for index, sub_prompt in enumerate(sub_prompts)
+    ],
+  ])
 
 async def chain_of_thought(
   messages: list[ChatMessage],
@@ -186,9 +191,7 @@ async def chain_of_thought(
   """Apply `Chain of Thought` (CoT) to the prompt.
   """
   logger.debug("chain_of_thought")
-  logger.debug(f"{_cot_framework=}")
-  logger.debug(f"{_cot_internal_monologue_system_message=}")
-  logger.debug(f"{_cot_external_dialogue_system_message=}")
+  logger.debug(f"{_cot_system_message=}")
 
   """
   # Psuedo-code
@@ -204,169 +207,100 @@ async def chain_of_thought(
   Return the distilled CoT response
   """
   assert len(messages) > 0
-  cot_context = [
-    # The Prompt
-    f"## User Prompt\n\n```markdown\n{messages[-1].content.strip()}\n```\n",
-  ]
-  if len(messages) > 1:
-    cot_context = [
-      # The conversation
-      "## Conversation History\n",
-      *[
-        f"### {msg.role} Message\n\n```markdown\n{msg.content.strip()}\n```\n"
-        for msg in messages[:-1]
-      ],
-      *cot_context,
-    ]
-  logger.debug(f"{cot_context=}")
+  prompt = messages[-1].content.strip()
+  prompt_context = "\n\n--\n\n".join([
+    f"> {msg.role} said...\n\n{msg.content.strip()}"
+    for msg in messages[:-1]
+  ])
 
   # Generate the sub-tasks using the CoT LLM
-  sub_tasks = await _cot_breakdown(cot_context, cot_llm)
-  assert isinstance(sub_tasks, list) and len(sub_tasks) > 0 and all(isinstance(t, tuple) for t in sub_tasks)
-  logger.debug(f"{sub_tasks=}")
+  sub_prompts = await _cot_breakdown(
+    prompt,
+    prompt_context,
+    cot_llm
+  )
+  assert isinstance(sub_prompts, list) \
+    and len(sub_prompts) > 0 \
+    and all(isinstance(t, dict) for t in sub_prompts) \
+    and all({"name", "description"} <= t.keys() for t in sub_prompts)
+  logger.debug(f"{sub_prompts=}")
   # Update the Context W/ the Sub-Tasks
-  cot_context.extend([
-    # The Sub-Tasks
-    f"## Sub-tasks\n",
-    *[f"### {index} - {name}\n\n{description}\n" for index, name, description in sub_tasks],
-    f"## Sub-task Solutions\n",
-  ])
-  sub_task_solutions: list[ChatMessage] = []
-  for index, sub_task in enumerate(sub_tasks, start=1):
-    assert isinstance(sub_task, tuple) and len(sub_task) == 3
+  for index, sub_prompt in enumerate(sub_prompts):
     # Solve the Sub-Task
-    sub_task_solution: ChatMessage = await cot_llm.chat( # TODO: Replace w/ the Function to prompt the LLM
+    sub_prompt_solution: ChatMessage = await cot_llm.chat( # TODO: Replace w/ the Function to prompt the LLM
       messages=[
         # System Message
         ChatMessage(
           role='system',
-          content=_cot_internal_monologue_system_message,
+          content=_cot_system_message,
           model=None,
           metadata={}
         ),
         # CoT Context
         ChatMessage(
           role='user',
-          content='\n'.join([
-            "# Context",
-            *cot_context,
-          ]),
+          content=_cot_render_context(
+            prompt,
+            prompt_context,
+            sub_prompts,
+          ),
           model=None,
           metadata={}
         ),
         # Actionable
         ChatMessage(
           role='user',
-          content=f"Please solve Sub-task {sub_task[0]} - {sub_task[1]}",
+          content=f"Please Reply to Sub-Prompt {index + 1} - {sub_prompt['name']}",
           model=None,
           metadata={}
         ),
       ],
     )
-    logger.debug(f"sub_task_solution_{index}: {sub_task_solution.content}")
-    sub_task_solutions.append(sub_task_solution)
-    cot_context.append(f"### {sub_task[0]} - {sub_task[1]}\n\n{sub_task_solution.content.strip()}\n")
-    # TODO: Build a Markdown Table on the fly to display the sub-task solutions
+    logger.debug(f"sub_prompt_response_{index}: {sub_prompt_solution.content}")
+    sub_prompts[index].update({
+      "solution": sub_prompt_solution.content.strip(),
+    })
 
-  # Assemble the Full Solution
-  full_solution: ChatMessage = await cot_llm.chat(
+  # Assemble the Final Response
+  final_response: ChatMessage = await llm.chat(
     messages=[
       # System Message
       ChatMessage(
         role='system',
-        content=_cot_internal_monologue_system_message,
+        content=_cot_system_message,
         model=None,
         metadata={}
       ),
       # CoT Context
       ChatMessage(
         role='user',
-        content='\n'.join([
-          "# Context",
-          *cot_context,
-        ]),
+        content=_cot_render_context(
+          prompt,
+          prompt_context,
+          sub_prompts,
+        ),
         model=None,
         metadata={}
       ),
       # Actionable
       ChatMessage(
         role='user',
-        content="Please assemble the full solution from the sub-task solutions",
+        content="Craft a thoughtful response to the original prompt based on the sub-prompts. Your response should be coherent from the perspective of the original prompt.",
         model=None,
         metadata={}
       ),
     ],
   )
-  logger.debug(f"full_solution: {full_solution.content}")
-
-  # Distill the Full Solution into the Final Response using the original LLM
-  distilled_response: ChatMessage = await llm.chat(
-    messages=[
-      # System Message
-      ChatMessage(
-        role='system',
-        content=_cot_external_dialogue_system_message,
-        model=None,
-        metadata={}
-      ),
-      # CoT Context
-      ChatMessage(
-        role='user',
-        content='\n'.join([
-          "# Context",
-          *cot_context,
-        ]),
-        model=None,
-        metadata={}
-      ),
-      # Verbose Solution
-      ChatMessage(
-        role='user',
-        content='\n'.join([
-          "# Verbose Solution",
-          full_solution.content,
-        ]),
-        model=None,
-        metadata={}
-      ),
-      # Actionable
-      ChatMessage(
-        role='user',
-        content="Please distill your verbose solution into a single response that is salient, concise, and coherent",
-        model=None,
-        metadata={}
-      ),
-    ],
-  )
-  logger.debug(f"distilled_response: {distilled_response.content}")
+  logger.debug(f"final_response: {final_response.content}")
 
   return ChatMessage(
     role='assistant',
-    content=distilled_response.content,
-    model=distilled_response.model,
+    content=final_response.content,
+    model=final_response.model,
     metadata={
       'chain_of_thought': {
-        "sub_tasks": [
-          {
-            "index": sub_task[0],
-            "name": sub_task[1],
-            "description": sub_task[2],
-            "solution": sub_task_solution.content,
-          }
-          for sub_task, sub_task_solution in zip(sub_tasks, sub_task_solutions) 
-        ],
-        ""
+        "sub_prompts": sub_prompts,
       }
-        [
-        *[
-          [
-            *sub_task,
-            sub_task_solution.content,
-          ]
-          for sub_task, sub_task_solution in zip(sub_tasks, sub_task_solutions)
-        ],
-        full_solution.content,
-      ]
     }
   )
 
