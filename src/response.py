@@ -141,7 +141,7 @@ async def _cot_breakdown(
         content="\n\n".join([
           "# Prompt",
           "Please deconstruct the following prompt into sub-prompts",
-          f"```markdown{prompt}```",
+          f"```markdown\n{prompt}\n```",
         ]),
         model=None,
         metadata={}
@@ -170,8 +170,8 @@ def _cot_render_context(
   """Render the CoT context."""
   logger.debug("_cot_render_context")
   return "\n\n".join([
-    f"# Prompt\n\n```markdown{prompt}```",
-    f"# Prompt Context\n\n```markdown{prompt_context}```",
+    f"# Prompt\n\n```markdown\n{prompt}\n```",
+    f"# Prompt Context\n\n```markdown\n{prompt_context}\n```",
     f"# Sub-Prompts",
     *[
       "\n\n".join([s for s in [
