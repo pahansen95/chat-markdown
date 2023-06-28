@@ -1,3 +1,45 @@
+"""# Lexer Module
+
+Implements a lexical analyzer for the Chat Language.
+
+The Chat Language is just Markdown structured in a specific way to encourage:
+
+- Human Readability & Writeability
+- Machine Readability & Writeability
+- Low Effort Knowledge Base Creation
+
+By breaking up chats into structured markdown files & embedding metadata in HTML comments, we can quickly build knowledge bases while still providing a human friendly interface for chatting with the LLM.
+
+The basic structure of a chat is as follows:
+
+```markdown
+<!-- start {"role": "system"} -->
+A System Message
+<!-- end -->
+
+---
+
+<!-- start {"role": "user"} -->
+A User Message
+<!-- end -->
+
+---
+
+<!-- start {"role": "assistant"} -->
+An Assistant Message
+<!-- end -->
+```
+
+The first message must be a system message. The System message may only appear once.
+Subsequent messages can be either a user message or an assistant message. Ordering and frequency of user and assistant messages is not restricted.
+Messages are wrapped in `start` & `end` blocks which are HTML comments. The `start` block contains metadata in JSON format.
+Messages are seperated by a horizontal rule (`---`).
+
+Currently White Space is important (outside of the message content) and must be preserved. This will probably change in the future.
+
+As of now the only limitation on the chat's length is the context window of the LLM.
+
+"""
 import re
 import json
 from typing import Generator, Any, Generic, TypeVar
