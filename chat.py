@@ -119,6 +119,11 @@ async def _main(*args: str, **kwargs: Any) -> int:
       "metadata": {
         "role": response.role,
         "model": response.model, # type: ignore
+        "mode": {
+          "ss": "Single Shot",
+          "cot": "Chain of Thought",
+          "tot": "Tree of Thoughts",
+        }[kwargs["mode"]],
         **response.metadata,
       },
     }),
