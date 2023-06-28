@@ -1,3 +1,5 @@
 .venv
 .cache
+*icloud
+.DS_Store
 __pycache__/
