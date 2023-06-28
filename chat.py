@@ -238,13 +238,16 @@ Examples:
 Response Modes:
   ss - Single Shot
     This is the standard response mode & generally the fastest. The LLM will generate a single, direct response to the input.
+    Use Single Shot when you want a quick response, have a simple prompt or are exploring a topic or thought process.
 
   cot - Chain of Thought
-    CoT is a framework that enhances an LLM's problem-solving capabilities by employing an ordered sequence of reasoning steps that collectively lead to a (more) comprehensive solution.
-    https://arxiv.org/pdf/2201.11903.pdf
+    Take more time & generate a thoughtful response. CoT is a framework that enhances an LLM's problem-solving capabilities by employing an ordered sequence of reasoning steps that collectively lead to a (more) comprehensive solution. For more information see https://arxiv.org/pdf/2201.11903.pdf
+    Use Chain of Thought when you want a more comprehensive response, have a complex prompt or have a problem statement that is well defined, well scoped & has concrete actionables/questions. CoT is best applied after narrowing down the scope using Single Shot.
 
   tot - Tree of Thoughts
-    Not yet implemented.
+    NOT YET IMPLEMENTED
+    Take alot of time & search the entire solution space for a more optimal response. [ADD MORE DESCRIPTION HERE]
+    Use Tree of Thoughts when [TBD]
   """) 
 
 def _setup_logging(**_kwargs):
