@@ -17,6 +17,10 @@ Options:
   --model=MODEL_ID                   Select the AI model. Available models: gp4, gpt3.5
                                      (Default: gpt3.5)
 
+  --mode=RESPONSE_MODE               Select how the model generates a response.
+                                     Available modes: ss, cot, tot
+                                     (Default: ss)
+
   --personality=PERSONALITY_ID       Select a personality preset for AI chat responses.
                                      Available presets: creative, balanced, reserved.
                                      (Default: balanced)
@@ -29,8 +33,6 @@ Options:
 
   --topp=FLOAT_VALUE                 Set a custom top_p value for the AI chat responses.
                                      (Overwrites the personality preset top_p value.)
-  
-  --reverse                          Reverse the Roles of the AI and the User in the Chat.
 
   --verbose                          Enable verbose logging.
   --debug                            Enable debug logging.
@@ -48,6 +50,20 @@ Examples:
 
   2. Customizing chat options for a more creative response:
      cat ./chat.md | python chat.py --model=gpt3 --temperature=1.5 --topp=0.9 --tokens=4096 > ./completed_chat.md
+
+Response Modes:
+  ss - Single Shot
+    This is the standard response mode & generally the fastest. The LLM will generate a single, direct response to the input.
+    Use Single Shot when you want a quick response, have a simple prompt or are exploring a topic or thought process.
+
+  cot - Chain of Thought
+    Take more time & generate a thoughtful response. CoT is a framework that enhances an LLM's problem-solving capabilities by employing an ordered sequence of reasoning steps that collectively lead to a (more) comprehensive solution. For more information see https://arxiv.org/pdf/2201.11903.pdf
+    Use Chain of Thought when you want a more comprehensive response, have a complex prompt or have a problem statement that is well defined, well scoped & has concrete actionables/questions. CoT is best applied after narrowing down the scope using Single Shot.
+
+  tot - Tree of Thoughts
+    NOT YET IMPLEMENTED
+    Take alot of time & search the entire solution space for a more optimal response. [ADD MORE DESCRIPTION HERE]
+    Use Tree of Thoughts when [TBD]
 ```
 
 ## Markdown Chat Format
