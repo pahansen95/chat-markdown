@@ -101,11 +101,32 @@ async def _main(*args: str, **kwargs: Any) -> int:
       )
     elif kwargs["mode"] == "cot":
       logger.debug("Chain of Thought Mode")
-      response = await resp.chain_of_thought(
-        messages=chat_messages,
-        llm=model_interface,
-        cot_llm=model_interface, # TODO: Allow overriding the CoT LLM (e.g. for a specialized LLM or one w/ a larger context window?)
+      # TODO: Allow overriding the CoT LLM (e.g. for a specialized LLM or one w/ a larger context window?)
+      # But for now just create a second LLM using gpt3.5 to use for the CoT to keep things cheaper
+      cot_openai_api_session = aiohttp.ClientSession(
+        base_url="https://api.openai.com",
+        headers={k: v for k, v in {
+          "Authorization": f"Bearer {kwargs['openai_api_key']}",
+          "OpenAI-Organization": kwargs.get("openai_org_id", None),
+          # "Content-Type": "application/json",
+        }.items() if v is not None},
       )
+      # TODO: While GPT3.5 is cheaper than GPT3.5-16k it still doesn't pay very strong attention to the system message which negatively impacts response quality
+      cot_model_info = openai.OpenAIModelInfo(
+        model_id=openai.OPENAI_AVAILABLE_MODELS["gpt3-16k"]["id"],
+        model_context_window=openai.OPENAI_AVAILABLE_MODELS["gpt3-16k"]["context_window"],
+      )
+      cot_session_manager = openai.OpenAISessionManager(
+        model=cot_model_info,
+        opts=openai_chat_opts,
+        session=cot_openai_api_session,
+      )
+      async with cot_session_manager as cot_model_interface:
+        response = await resp.chain_of_thought(
+          messages=chat_messages,
+          llm=model_interface,
+          cot_llm=cot_model_interface,
+        )
     elif kwargs["mode"] == "tot":
       raise NotImplementedError("Tree of Thoughts is not yet implemented")
     else:
