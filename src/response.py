@@ -53,6 +53,8 @@ Here's a schematic outline for applying CoT:
 4. Declare Your Findings: Communicate step-by-step solutions of the sub-problems to the user, creating a clear link between each solution and its corresponding sub-problem. This forms the next part of the external dialogue.
 
 5. Assemble Full Solution & Declare Result: Put together the solutions internally, then present to the user a comprehensive final answer, making sure you highlight connections from the final solution to the component parts. This combines both your external and internal dialogue.
+
+6. Distill the CoT into a Single Response: Finally, distill the CoT into a single response that is salient, concise, and coherent. This is the last part & will be returned to the user.
 """
 
 _cot_internal_monologue_system_message = f"""\
@@ -353,8 +355,18 @@ async def chain_of_thought(
           }
           for sub_task, sub_task_solution in zip(sub_tasks, sub_task_solutions) 
         ],
-        "full_solution": full_solution.content,
+        ""
       }
+        [
+        *[
+          [
+            *sub_task,
+            sub_task_solution.content,
+          ]
+          for sub_task, sub_task_solution in zip(sub_tasks, sub_task_solutions)
+        ],
+        full_solution.content,
+      ]
     }
   )
 
