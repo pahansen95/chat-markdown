@@ -179,7 +179,7 @@ def _parse_kwargs(*args: str) -> dict[str, Any]:
     "debug": False,
     "trace": False,
     "quiet": False,
-    "model": "gpt3",
+    "model": "gpt3-16k",
     "personality": None,
     "temperature": None,
     "tokens": None,
@@ -219,8 +219,8 @@ This script provides a chatbot interface using the OpenAI API. You can select di
 Options:
   -h, --help                         Show this help message and exit.
 
-  --model=MODEL_ID                   Select the AI model. Available models: gp4, gpt3.5
-                                     (Default: gpt3.5)
+  --model=MODEL_ID                   Select the AI model. Available models: gp4, gpt3-16k, gpt3
+                                     (Default: gpt3-16k)
 
   --mode=RESPONSE_MODE               Select how the model generates a response.
                                      Available modes: ss, cot, tot
