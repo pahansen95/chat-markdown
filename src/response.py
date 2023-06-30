@@ -40,81 +40,177 @@ async def single_shot(
 ### Chain of Thought ###
 
 _cot_framework = """\
-Chain of Thought (`CoT`) enhances LLM capabilities by breaking the prompt down into sub-prompts, analyzing them and building a thoughtful response. The steps are:
-1. Breakup the prompt into three consituent sub-prompts.
-2. Answer each individual sub-prompt, in order, providing detail proportinal to it's complexity.
-3. Craft a holistic response to the original prompt reflecting on the sub-prompts and their responses.
+Chain of Thought (`CoT`) enhances LLM capabilities by crafting a more precise, accurate & objective response through decomposition of the orignal prompt.
+The `CoT` framework is as follows:
+1. Decompose the prompt into constituents.
+2. Explicitly think through how to reply to each constituent. Favor novel ideas and avoid summarization.
+3. Reply directly to the original prompt crafting a holistic response using the constituents as a guide.
 """
 
 _cot_system_message = f"""\
-Apply Chain of Thought as you respond to the user.
+Apply the Chain of Thought Framework in your responses.
 
 {_cot_framework}
+
+Your responses should use this template:
+
+````markdown
+1. **Constituent**
+  - the explicit thought process as an itemized list
+  - ...
+2. ...
+
+A salient and concise response to the original prompt using the constituents as a guide...
+````
 """
 
-_cot_breakdown_system_message = f"""\
-Deconstruct the given prompt into 3 sub-prompts using these principles:
-- Simplify: Break the prompt into manageable parts.
-- Sequential Approach: Keep the logical progression in mind.
-- Compartimentalization: Treat distinct elements as unique sub-prompts.
-- Clarity: Each sub-prompt should be defined precisely.
+_cot_decomposition_principles = """\
+- Identify Thought Units: Break the prompt into distinct thought units that represent granular and self-contained units of thought.
+- Simplify Complex Thought Units: Recursively breakout complex thought units while maintaining granularity, ensuring clarity and coherence.
+- Organize Sequentially: Arrange thought units logically and sequentially to create a coherent flow of ideas.
+- Ensure Clarity: Each thought unit should be clear, concise, and unambiguous, avoiding overlap or ambiguity within a single unit.
+"""
 
-Finally, follow this schema:
-- Format sub-tasks as an ordered markdown list.
-- Each Sub-task item has a 3 word name and salient one-line description separated by a colon.
+_cot_decomposition_format = """\
+Present the constituents as an itemized list. Each item should contain an identifying name and a natural language description of the constituent with no line breaks. The name & description should be seperated by a colon. There should be no sub items.
 
-Example:
+Exclusively use the following template:
 ```markdown
-1. First Task Name : Short task description on a single line.
+1. Identifying Constituent Name: Salient Description of the constituent as a single line.
+
+2. Identifying Constituent Name: Salient Description of the constituent as a single line.
+
+n. Identifying Constituent Name: Salient Description of the constituent as a single line.
 ```
 """
 
-_cot_breakdown_subtask_regex = re.compile(
-  r"(\d+)\.\s+([^\n:]+):\s+([^\n]+)",
-  re.MULTILINE
+_cot_breakdown_system_message = f"""\
+You will be given a prompt & relevant context. Your goal is to decompose the prompt into constituent sub-prompts using the provided principles & formatting. You are not to answer or reply to the prompt itself as your output will be used for further processing of the prompt.
+
+Decomposition Principles:
+
+{_cot_decomposition_principles}
+
+Decomposition Format:
+
+{_cot_decomposition_format}
+"""
+
+_cot_breakdown_constituent_regex = re.compile(
+  r"(\d+)\.\s+([^:\n]+)(?::\s*.*?)?((?:(?!\n\d+\.)[\s\S])+)(?:\n(?=\d+\.)|$)",
+  re.MULTILINE | re.DOTALL
 )
+"""
+Matches items in a numbered markdown list.
+Capture Groups:
+  1. Item Number
+  2. Name
+  3. Description (Multiline)
+"""
 
 async def _cot_breakdown(
   messages: list[ChatMessage],
   llm: LLM,
 ) -> list[dict[str, str]]:
-  """Breakdown the prompt into sub-tasks using the llm."""
+  """Breakdown the prompt into constituents using the llm."""
   logger.debug("_cot_breakdown")
+  prompt_context = "\n\n".join([msg.content for msg in messages[-3:-1] if msg.role != 'system'])
+  decomp_messages = [
+    # System Message
+    ChatMessage(
+      role='system',
+      content=_cot_breakdown_system_message,
+      model=None,
+      metadata={}
+    ),
+    ChatMessage(
+      role='user',
+      content="\n\n".join([
+        "# Prompt to Decompose",
+        f"````markdown\n{messages[-1].content.strip()}\n````",
+        "# Prompt Context",
+        f"````markdown\n{prompt_context.strip()}\n````",
+      ]),
+      model=None,
+      metadata={}
+    ),
+    ChatMessage(
+      role='assistant',
+      content="I will now exclusively decompose the provided prompt into it's constituents adhering to the principles & formatting outlined in my system message. I will not respond or otherwise expand on the prompt. I must strictly adhere to the formatting & any provided templates.",
+      model=None,
+      metadata={}
+    ),
+  ]
+  logger.debug("Message being submitted for Decomposition of the prompt:\n\n" + "\n\n".join([f"> {msg.role}\n\n{msg.content}" for msg in decomp_messages]))
+  # raise NotImplementedError
+
   response = await llm.chat(
-    messages=[
+    messages=decomp_messages,
+  )
+  logger.debug(f"The Decomposition response was:\n{response.content}")
+
+  # Extract the constituents from the response using the regex
+
+  matches_found = _cot_breakdown_constituent_regex.findall(response.content)
+  logger.debug("The Following Matches were found:\n" + "\n\n".join(f"{match=}" for match in matches_found))
+
+  # ###
+  # # for testing force the response to be misformatted
+  # if matches_found:
+  #   response.content = "\n\n".join([
+  #     f"- **{match[1]}**\n  - {match[2]}"
+  #     for match in matches_found
+  #   ])
+  #   logger.debug(f"Forcing the Decomposition response into bad formatting:\n{response.content}")
+  #   matches_found = None
+  # ###
+
+  if not matches_found:
+    # Reprompt the LLM instructing it to fix it's formatting
+    fix_formatting_messages = [
       # System Message
       ChatMessage(
         role='system',
-        content=_cot_breakdown_system_message,
+        content=f"Fix the formatting of the user message so it adheres to the following: {_cot_decomposition_format}",
         model=None,
         metadata={}
       ),
+      # The Response
       ChatMessage(
         role='user',
-        content="\n\n".join([
-          "# Context",
-          *[m.content for m in messages[-3:-1]],
-          "# Prompt",
-          messages[-1].content,
-        ]),
+        content=response.content,
         model=None,
-        metadata={}
+        metadata={},
       ),
-    ],
-  )
-  logger.debug(f"{response.content}")
+    ]
+    logger.debug("Message being submitted for Fixing the formatting of the Decomposition response:\n\n" + "\n\n".join([f"> {msg.role}\n\n{msg.content}" for msg in fix_formatting_messages]))
+    fixed_response = await llm.chat(
+      messages=fix_formatting_messages,
+    )
+    logger.debug(f"The Fixed Formatting response was:\n{fixed_response.content}")
+    matches_found = _cot_breakdown_constituent_regex.findall(fixed_response.content)
+    logger.debug("The Following Matches were found:\n" + "\n\n".join(f"{match=}" for match in matches_found))
 
-  # Extract the sub-tasks from the response using the regex
-  return [
+  # raise NotImplementedError
+
+  constituents = [
     {
-      "name": sub_prompt[1],
-      "description": sub_prompt[2],
+      "name": constituent[1],
+      "description": constituent[2].replace("\n", " ") # Remove newlines from the description to fit it on one line
     }
-    for sub_prompt in sorted(
-      _cot_breakdown_subtask_regex.findall(response.content),
+    for constituent in sorted(
+      matches_found,
       key=lambda t: t[0]
     )
   ]
+  if len(constituents) == 0:
+    logger.error("No constituents were generated. This is likely due to an output error w/ the LLM.")
+    logger.info(f"# LLM Model Response\n\n{response.content}")
+    raise RuntimeError("No constituents were generated. This is likely due to an output error w/ the LLM.")
+  
+  logger.debug(f"{constituents=}")
+
+  return constituents
 
 async def chain_of_thought(
   messages: list[ChatMessage],
@@ -128,16 +224,16 @@ async def chain_of_thought(
 
   assert len(messages) > 0
 
-  # Generate the sub-tasks using the CoT LLM
-  sub_prompts = await _cot_breakdown(
+  # Generate the constituents using the CoT LLM
+  constituents = await _cot_breakdown(
     messages,
     cot_llm
   )
-  logger.debug(f"{sub_prompts=}")
+  assert len(constituents) > 0
 
-  sub_prompt_content = "\n".join([
-    f"{index + 1}. {sub_prompt['name']}: {sub_prompt['description']}"
-    for index, sub_prompt in enumerate(sub_prompts)
+  constituent_content = "\n".join([
+    f"{index + 1}. {constituent['name']}: {constituent['description']}"
+    for index, constituent in enumerate(constituents)
   ])
 
   cot_response = await llm.chat(
@@ -145,23 +241,17 @@ async def chain_of_thought(
       # System Message
       ChatMessage(
         role='system',
-        content="\n\n".join([
-          _cot_system_message,
-          "Original System Message was:",
-          "````markdown",
-          next(m for m in messages if m.role == 'system').content,
-          "````",
-        ]),
+        content=f"{_cot_system_message}\n\n{next(m for m in messages if m.role == 'system').content}\n\nThese are the `CoT` constituents for your next response:\n\n{constituent_content}",
         model=None,
         metadata={}
       ),
-      # Actionable
-      ChatMessage(
-        role='user',
-        content=f"`CoT` Sub-Prompts are:\n\n{sub_prompt_content}",
-        model=None,
-        metadata={}
-      ),
+      # # Constituents
+      # ChatMessage(
+      #   role='assistant',
+      #   content=f"`CoT` constituents are:\n\n{constituent_content}",
+      #   model=None,
+      #   metadata={}
+      # ),
       # Original Prompt stripping the System Message
       *[msg for msg in messages if msg.role != 'system'],
     ],
@@ -173,7 +263,7 @@ async def chain_of_thought(
     model=cot_response.model,
     metadata={
       'chain_of_thought': {
-        "sub_prompts": sub_prompts,
+        "constituents": constituents,
       }
     }
   )
