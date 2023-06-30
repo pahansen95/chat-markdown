@@ -52,15 +52,15 @@ Apply the Chain of Thought Framework in your responses.
 
 {_cot_framework}
 
-Your responses should use this template:
+Your responses should follow this template. Anything in angle brackets is a placeholder and should be replaced with the appropriate value.
 
 ````markdown
-1. **Constituent**
-  - the explicit thought process as an itemized list
-  - ...
-2. ...
+1. **<Constituent Name>**
+  - <the explicit thought process as an itemized list>
+  - <...>
+<n>. <...>
 
-A salient and concise response to the original prompt using the constituents as a guide...
+<A salient and concise response to the original prompt using the constituents as a guide...>
 ````
 """
 
@@ -74,13 +74,13 @@ _cot_decomposition_principles = """\
 _cot_decomposition_format = """\
 Present the constituents as an itemized list. Each item should contain an identifying name and a natural language description of the constituent with no line breaks. The name & description should be seperated by a colon. There should be no sub items.
 
-Exclusively use the following template:
+Exclusively use the following template; Anything in angle brackets is a placeholder and should be replaced with the appropriate value:
 ```markdown
-1. Identifying Constituent Name: Salient Description of the constituent as a single line.
+1. <Identifying Constituent Name>: <Salient Description of the constituent as a single line.>
 
-2. Identifying Constituent Name: Salient Description of the constituent as a single line.
+2. <Identifying Constituent Name>: <Salient Description of the constituent as a single line.>
 
-n. Identifying Constituent Name: Salient Description of the constituent as a single line.
+<n>. <Identifying Constituent Name>: <Salient Description of the constituent as a single line.>
 ```
 """
 
