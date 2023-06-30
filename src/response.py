@@ -78,8 +78,6 @@ Exclusively use the following template; Anything in angle brackets is a placehol
 ```markdown
 1. <Identifying Constituent Name>: <Salient Description of the constituent as a single line.>
 
-2. <Identifying Constituent Name>: <Salient Description of the constituent as a single line.>
-
 <n>. <Identifying Constituent Name>: <Salient Description of the constituent as a single line.>
 ```
 """
