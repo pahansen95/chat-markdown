@@ -54,7 +54,7 @@ async def _main(*args: str, **kwargs: Any) -> int:
     headers={k: v for k, v in {
       "Authorization": f"Bearer {kwargs['openai_api_key']}",
       "OpenAI-Organization": kwargs.get("openai_org_id", None),
-      # "Content-Type": "application/json",
+      "Content-Type": "application/json",
     }.items() if v is not None},
   )
   _model = openai.OPENAI_AVAILABLE_MODELS[kwargs["model"]]
@@ -87,17 +87,19 @@ async def _main(*args: str, **kwargs: Any) -> int:
   ]))
 
   chat_session_manager = openai.OpenAISessionManager(
-    model=openai_model_info,
-    opts=openai_chat_opts,
+    chat_model=openai_model_info,
+    chat_opts=openai_chat_opts,
     session=openai_api_session,
   )
     
-  async with chat_session_manager as model_interface:
+  async with chat_session_manager as model_tools:
+    assert model_tools[0] is not None
+    _, model_interface = model_tools
     if kwargs["mode"] == "ss":
       logger.debug("Single Shot Mode")
       response = await resp.single_shot(
         messages=chat_messages,
-        llm=model_interface,
+        llm=model_tools[0][0],
       )
     elif kwargs["mode"] == "cot":
       logger.debug("Chain of Thought Mode")
@@ -117,15 +119,17 @@ async def _main(*args: str, **kwargs: Any) -> int:
         model_context_window=openai.OPENAI_AVAILABLE_MODELS["gpt3-16k"]["context_window"],
       )
       cot_session_manager = openai.OpenAISessionManager(
-        model=cot_model_info,
-        opts=openai_chat_opts,
+        chat_model=cot_model_info,
+        chat_opts=openai_chat_opts,
         session=cot_openai_api_session,
       )
-      async with cot_session_manager as cot_model_interface:
+      async with cot_session_manager as cot_model_tools:
+        assert cot_model_tools[0] is not None
+        _, cot_model_interface = cot_model_tools
         response = await resp.chain_of_thought(
           messages=chat_messages,
-          llm=model_interface,
-          cot_llm=cot_model_interface,
+          llm=model_tools[0][0],
+          cot_llm=cot_model_tools[0][0],
         )
     elif kwargs["mode"] == "tot":
       raise NotImplementedError("Tree of Thoughts is not yet implemented")
@@ -136,16 +140,16 @@ async def _main(*args: str, **kwargs: Any) -> int:
   response = lex.transpile_ast_to_markdown(*[
     *chat_ast,
     *lex.transpile_message_dict_to_ast({
-      "content": response.content,
+      "content": response[0].content,
       "metadata": {
-        "role": response.role,
-        "model": response.model, # type: ignore
+        "role": response[0].role,
+        "model": response[0].model, # type: ignore
         "mode": {
           "ss": "Single Shot",
           "cot": "Chain of Thought",
           "tot": "Tree of Thoughts",
         }[kwargs["mode"]],
-        **response.metadata,
+        **response[0].metadata,
       },
     }),
   ])

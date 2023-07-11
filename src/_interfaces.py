@@ -6,6 +6,18 @@ Data structurues & functional interfaces common accross the package. This module
 
 from dataclasses import dataclass, field
 from typing import Any, Callable
+import numpy as np
+
+class Error(Exception):
+  """Base class for exceptions in this module.  Attributes:
+      message -- explanation of the error
+  """
+
+  def __init__(self, message):
+    self.message = message
+
+  def __repr__(self) -> str:
+    return f"{self.message}"
 
 @dataclass
 class ChatMessage:
@@ -19,19 +31,69 @@ class ChatMessage:
   metadata: dict[str, Any] = field(default_factory=dict)
   """Arbitrary metadata associated with the message"""
 
+Tokens = list[int]
+"""Tokens are represented as a list of Token IDs. Token IDs are integers."""
+
+class TokenizerError(Error):
+  """Exception raised for errors in the Tokenizer interface."""
+  ...
+
+@dataclass
+class Tokenizer:
+  """Interface for tokenizing text"""
+  model: str
+
+  async def encode(self, *text: str) -> list[Tokens]:
+    """Given a batch of text, encode each item into tokens. Token IDs are integers."""
+    raise NotImplementedError()
+
+  async def decode(self, *tokens: Tokens) -> list[str]:
+    """Give a batch of tokens, decode each item into a string."""
+    raise NotImplementedError()
+
+  async def tokens_consumed(self, *messages: ChatMessage) -> int:
+    """Calculate the number of tokens consumed by a Model. Usually this functioin accounts for particulars of the model or API. Primary use cases are determining the token count for cost analysis or calculating the remaining Context Window size. Explicit counting of the tokens returned by encode() should be used when per token precision is required."""
+    raise NotImplementedError()
+
+class LLMError(Error):
+  """Exception raised for errors in the LLM interface."""
+  ...
+class LLMConnectionError(LLMError):
+  ...
+
 @dataclass
 class LLM:
   """Interface for a Large Language Model"""
   name: str
   """The Unique name of the Model being used"""
   context_window: int
-  """The size of the model's context window (prompt + response must be fit within this size)"""
+  """The token size of the model's context window (prompt + response must fit within this size)"""
 
-  async def calculate_tokens(self, *messages: ChatMessage) -> int:
-    """Calculate the total number of tokens in a list of messages"""
-    raise NotImplementedError()
-
-  async def chat(self, messages: list[ChatMessage]) -> ChatMessage:
+  async def chat(self, messages: list[ChatMessage], **kwargs) -> tuple[ChatMessage, ...]:
     """Chat with the LLM"""
     raise NotImplementedError()
-  
+
+@dataclass
+class Embeddings:
+  """Interface for an Embedding Model"""
+  name: str
+  """The Unique name of the Model being used"""
+  context_window: int
+  """The token size of the model's context window (the input must fit within this size)"""
+  vector_dimensions: int
+  """The length of the embedding vector"""
+
+  async def embed(
+    self,
+    *text: str | Tokens,
+    tensor: np.ndarray | None = None,
+  ) -> np.ndarray | None:
+    """Embed a batch of text
+    Args:
+      text (str | Tokens): A batch of text or already encoded Tokens to embed
+      tensor (np.ndarray | None): When provided, the embedding vector is stored in this tensor. The tensor must have the shape (len(text), dims) & dtype float32.
+    
+    Returns:
+      The embedding vector of size (len(text), dims) & dtype float32, or None a tensor was provided.
+    """
+    raise NotImplementedError()
