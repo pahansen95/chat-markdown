@@ -86,14 +86,12 @@ class Embeddings:
   async def embed(
     self,
     *text: str | Tokens,
-    tensor: np.ndarray | None = None,
-  ) -> np.ndarray | None:
+  ) -> np.ndarray:
     """Embed a batch of text
     Args:
       text (str | Tokens): A batch of text or already encoded Tokens to embed
-      tensor (np.ndarray | None): When provided, the embedding vector is stored in this tensor. The tensor must have the shape (len(text), dims) & dtype float32.
     
     Returns:
-      The embedding vector of size (len(text), dims) & dtype float32, or None a tensor was provided.
+      The embedding vector of size (len(text), dims) & dtype float32.
     """
     raise NotImplementedError()

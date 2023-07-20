@@ -20,7 +20,7 @@ Implement different response strategies for the LLM.
 
 """
 
-from ._interfaces import ChatMessage, LLM, Tokenizer
+from .interfaces import ChatMessage, LLM, Tokenizer
 from typing import Any
 
 import logging

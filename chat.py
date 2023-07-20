@@ -11,6 +11,7 @@ import aiohttp
 from loguru import logger
 
 from src import openai, lexer as lex, response as resp
+from src.interfaces import ChatMessage
 
 async def _main(*args: str, **kwargs: Any) -> int:
   logger.trace(f"Args: {args}")
@@ -34,7 +35,7 @@ async def _main(*args: str, **kwargs: Any) -> int:
 
   # TODO: Cut out the middleman & use the AST directly
   chat_messages = [
-    openai.ChatMessage(
+    ChatMessage(
       content=message["content"], # type: ignore
       role=message["metadata"]["role"], # type: ignore
       model=message["metadata"].get("model", None), # type: ignore
@@ -91,18 +92,22 @@ async def _main(*args: str, **kwargs: Any) -> int:
     chat_opts=openai_chat_opts,
     session=openai_api_session,
   )
-    
+  total_responses = max(int(kwargs["replies"]), 1)
+  model_responses: tuple[ChatMessage, ...] = ()
   async with chat_session_manager as model_tools:
     assert model_tools[0] is not None
-    _, model_interface = model_tools
     if kwargs["mode"] == "ss":
       logger.debug("Single Shot Mode")
-      response = await resp.single_shot(
+      model_responses = await resp.single_shot(
         messages=chat_messages,
         llm=model_tools[0][0],
+        responses=total_responses,
       )
     elif kwargs["mode"] == "cot":
       logger.debug("Chain of Thought Mode")
+      if total_responses > 1:
+        logger.warning(f"Chain of Thought Mode does not support multiple responses. '--responses={total_responses}' will be ignored.")
+        total_responses = 1
       # TODO: Allow overriding the CoT LLM (e.g. for a specialized LLM or one w/ a larger context window?)
       # But for now just create a second LLM using gpt3.5 to use for the CoT to keep things cheaper
       cot_openai_api_session = aiohttp.ClientSession(
@@ -125,8 +130,7 @@ async def _main(*args: str, **kwargs: Any) -> int:
       )
       async with cot_session_manager as cot_model_tools:
         assert cot_model_tools[0] is not None
-        _, cot_model_interface = cot_model_tools
-        response = await resp.chain_of_thought(
+        model_responses = await resp.chain_of_thought(
           messages=chat_messages,
           llm=model_tools[0][0],
           cot_llm=cot_model_tools[0][0],
@@ -136,22 +140,24 @@ async def _main(*args: str, **kwargs: Any) -> int:
     else:
       raise RuntimeError(f"Invalid mode: {kwargs['mode']}")
 
-  # TODO: Cut out the middleman & use the AST directly  
+  assert len(model_responses) > 0, "No responses generated"
+  assert total_responses == len(model_responses), f"Requested {total_responses} responses but only received {len(model_responses)}"
+  # TODO: Cut out the middleman & use the AST directly
   response = lex.transpile_ast_to_markdown(*[
     *chat_ast,
-    *lex.transpile_message_dict_to_ast({
-      "content": response[0].content,
+    *lex.transpile_message_dict_to_ast(*[{
+      "content": resp.content,
       "metadata": {
-        "role": response[0].role,
-        "model": response[0].model, # type: ignore
+        "role": resp.role,
+        "model": resp.model, # type: ignore
         "mode": {
           "ss": "Single Shot",
           "cot": "Chain of Thought",
           "tot": "Tree of Thoughts",
         }[kwargs["mode"]],
-        **response[0].metadata,
+        **resp.metadata,
       },
-    }),
+    } for resp in model_responses]),
   ])
   
   # Add the user role to the response for convenience
@@ -190,6 +196,7 @@ def _parse_kwargs(*args: str) -> dict[str, Any]:
     "topp": None,
     "reverse": False,
     "mode": "ss",
+    "replies": 1,
   }
   for arg in args:
     if arg.startswith("-"):

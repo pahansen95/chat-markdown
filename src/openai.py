@@ -17,7 +17,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from ._interfaces import ChatMessage, LLM, Tokenizer, Tokens, Embeddings
+from .interfaces import ChatMessage, LLM, Tokenizer, Tokens, Embeddings
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +44,7 @@ OPENAI_AVAILABLE_MODELS = {
   },
   "ada": {
     "kind": "embedding",
-    "id": "text-embedding-ada-0002",
+    "id": "text-embedding-ada-002",
     "context_window": 8191,
     "vector_dimensions": 1536,
   }
@@ -175,11 +175,11 @@ class OpenAITokenizerManager:
   async def __aexit__(self, exc_type, exc_value, traceback):
     await self.stop()
   
-  async def encode(self, *messages: str) -> list[list[int]]:
+  async def encode(self, *messages: str) -> list[Tokens]:
     assert self._context is not None
     return [self._context.encoding.encode(m, disallowed_special=()) for m in messages] # Disabled disallowed_special because we want to allow any text. Ran into an error testing on OpenAI's Paper's that had the ChatML Markup in it.
   
-  async def decode(self, *tokens: list[int]) -> list[str]:
+  async def decode(self, *tokens: Tokens) -> list[str]:
     assert self._context is not None
     return [self._context.encoding.decode(t, errors='strict') for t in tokens]
 
@@ -247,6 +247,10 @@ class _OpenAISessionManagerContext:
   embedding_interface: Embeddings | None = None
   embedding_tokenizer_manager: OpenAITokenizerManager | None = None
   concurrent_lock: asyncio.Semaphore | None = None
+  request_queue: asyncio.Queue[asyncio.Event] | None = None
+  """Each Request will submit a Condition to this queue. The Request will block until notified, at which point the request will be submitted to the OpenAI API."""
+  request_queue_task: asyncio.Task | None = None
+  request_period: float | None = None
   ratelimit_gate: asyncio.Event | None = None
   ratelimit_task: asyncio.Task | None = None
   """A Gate that is closed (false) when the ratelimit is exceeded. This is used to prevent concurrent requests from being made when the ratelimit is exceeded."""
@@ -261,15 +265,54 @@ class OpenAISessionManager:
   """The Text Embedding Model to use; currently only text-embedding-ada-002 is supported"""
   session: aiohttp.ClientSession = field(default_factory=aiohttp.ClientSession)
   """The aiohttp ClientSession to use for requests to the OpenAI API"""
-  concurrency: int = field(default=10) # Max number of concurrent requests to OpenAI API
+  close_session_on_stop: bool = field(default=True)
+  """Whether to close the aiohttp ClientSession when the session manager is stopped"""
+  concurrency: int = field(default=1) # Max number of concurrent requests to OpenAI API
   """The maximum number of concurrent requests to the OpenAI API"""
   _context: _OpenAISessionManagerContext = field(init=False, default_factory=_OpenAISessionManagerContext)
   
   async def __aenter__(self) -> tuple[tuple[LLM, Tokenizer] | None, tuple[Embeddings, Tokenizer] | None]:
+    logger.debug("Entering OpenAISessionManager Context...")
     return await self.start()
   
   async def __aexit__(self, exc_type, exc_value, traceback):
-    await self.stop()
+    logger.debug("Stopping the OpenAISessionManager...")
+    logger.debug(f"{exc_type=}, {exc_value=}, {traceback=}")
+    try:
+      await self.stop()
+      # raise NotImplementedError
+    except Exception as e:
+      logger.warning(f"An exception occurred while stopping the OpenAISessionManager: {e}")
+      logger.exception(e)
+      raise e
+    if exc_type is not None:
+      logger.warning("An exception occurred while exiting the OpenAISessionManager Context. Reraising...")
+      raise exc_type(exc_value).with_traceback(traceback)
+    logger.debug("Exiting the OpenAISessionManager Context...")
+
+  async def _request_approval_loop(self, ready: asyncio.Event):
+    """Manage requests in the request queue. Notify waiting tasks they can submit their request to the OpenAI API."""
+    assert self._context is not None
+    assert self._context.request_queue is not None
+    assert self._context.concurrent_lock is not None
+    assert self._context.ratelimit_gate is not None
+    assert self._context.request_period is not None
+    logger.info("Starting Approval Loop...")
+    try:
+      ready.set()
+      while True:
+        logger.debug("Approval waiting for a request...")
+        api_request = await self._context.request_queue.get()
+        logger.debug("Approval received a request, waiting for ratelimit gate to open...")
+        # Wait for the rate limit gate to open
+        await self._context.ratelimit_gate.wait()
+        logger.debug("Approval is now Approving request...")
+        api_request.set()
+        logger.debug(f"Approval approved a request so will now sleep briefly ({self._context.request_period})...")
+        await asyncio.sleep(self._context.request_period) # sleep so we don't flood the API with requests
+    except asyncio.CancelledError:
+      logger.info("Approval loop cancelled")
+      return
 
   async def start(self) -> tuple[tuple[LLM, Tokenizer] | None, tuple[Embeddings, Tokenizer] | None]:
     logger.info("Starting OpenAI API Session...")
@@ -284,20 +327,23 @@ class OpenAISessionManager:
           and models_resp_json.keys() >= {"object", "data"} \
           and models_resp_json["object"] == "list" \
           , "Invalid response from OpenAI API"
-        logger.debug(json.dumps(sorted(models_resp_json['data'], key = lambda m: m['id']), indent=2))
+        # logger.debug(json.dumps(sorted(models_resp_json['data'], key = lambda m: m['id']), indent=2))
         model_list = [
           m['id'] for m in models_resp_json["data"]
           if m["object"] == "model"
         ]
+        logger.debug(f"Found {len(model_list)} models: {json.dumps(model_list)}")
         assert len(model_list) > 0, "No models found"
     except Error as e:
       logger.error(f"Failed to start Chat Session: {e}")
-      await self.session.close()
+      if self.close_session_on_stop:
+        await self.session.close()
       raise
 
     assert self.chat_model is not None or self.embedding_model is not None, "Either model or embedding_model must be specified"
     
     if self.chat_model is not None:
+      logger.debug("Assembling up Chat Interface...")
       assert self.chat_opts is not None, "opts must be specified if model is specified"
       if self.chat_model.model_id not in model_list:
         logger.error(f"Couldn't find the requested model: {self.chat_model.model_id}")
@@ -317,8 +363,10 @@ class OpenAISessionManager:
       )
       self._context.chat_tokenizer_manager = OpenAITokenizerManager(self.chat_model.model_id)
       _chat_tokenizer_interface = await self._context.chat_tokenizer_manager.start()
+      logger.debug("Chat Interface has been assembled")
     
     if self.embedding_model is not None:
+      logger.debug("Assembling up Embedding Interface...")
       if self.embedding_model.model_id not in model_list:
         logger.error(f"Couldn't find the requested model: {self.embedding_model.model_id}")
         logger.info(f"Available models: {model_list}")
@@ -329,8 +377,8 @@ class OpenAISessionManager:
         context_window=self.embedding_model.model_context_window,
         vector_dimensions=self.embedding_model.vector_dimensions,
       )
-      async def _embed(*text: str | Tokens, tensor: np.ndarray | None) -> np.ndarray | None:
-        return await self.embed(*text, tensor=tensor)
+      async def _embed(*text: str | Tokens) -> np.ndarray:
+        return await self.embed(*text)
       setattr(
         self._context.embedding_interface,
         "embed",
@@ -338,11 +386,22 @@ class OpenAISessionManager:
       )
       self._context.embedding_tokenizer_manager = OpenAITokenizerManager(self.embedding_model.model_id)
       _embeddings_tokenizer_interface = await self._context.embedding_tokenizer_manager.start()
+      logger.debug("Embedding Interface has been assembled")
 
+    # TODO: Request Queueing needs to be rewritten, we are observing rate limiting responses
+    logger.debug("Setting up API Request Controls...")
+    self._context.request_period = 1 / self.concurrency
+    self._context.request_queue = asyncio.Queue()
     self._context.concurrent_lock = asyncio.Semaphore(self.concurrency)
     self._context.ratelimit_gate = asyncio.Event()
     self._context.ratelimit_gate.set() # Open the gate
     self._context.is_held = True
+
+    logger.debug("Schedule Approval Loop & wait till it's ready...")
+    wait_for_loop = asyncio.Event()
+    self._context.request_queue_task = asyncio.create_task(self._request_approval_loop(wait_for_loop))
+    await wait_for_loop.wait()
+    logger.debug("Approval Loop Started")
     
     logger.info("OpenAI API Session Started")
     return (
@@ -358,18 +417,29 @@ class OpenAISessionManager:
   
   async def stop(self):
     logger.info("Stopping OpenAI API Session...")
-    await self.session.close()
+    if self.close_session_on_stop:
+      logger.debug("Closing OpenAI API Session...")
+      await self.session.close()
+    if self._context.request_queue_task is not None:
+      logger.debug("Cancelling Request Queue Task...")
+      self._context.request_queue_task.cancel()
+      logger.debug("Awaiting Request Queue Task...")
+      await self._context.request_queue_task
+      logger.debug("Request Queue Task has been cancelled")
+    logger.debug("Stopping Chat Tokenizer Manager...")
     if self.chat_model is not None:
       assert self._context.chat_tokenizer_manager is not None
       await self._context.chat_tokenizer_manager.stop()
+    logger.debug("Stopping Embeddings Tokenizer Manager...")
     if self.embedding_model is not None:
       assert self._context.embedding_tokenizer_manager is not None
       await self._context.embedding_tokenizer_manager.stop()
-    
+    logger.debug("Cancelling Rate Limit Task...")
     if self._context.ratelimit_task is not None:
       self._context.ratelimit_task.cancel()
       await self._context.ratelimit_task
-    
+
+    logger.debug("Resetting internal context...")
     self._context.is_held = False
     self._context.concurrent_lock = None
     self._context.ratelimit_gate = None
@@ -406,23 +476,39 @@ class OpenAISessionManager:
     """Attempt to make a request to the OpenAI API"""
     assert self._context.concurrent_lock is not None
     assert self._context.ratelimit_gate is not None
+    assert self._context.request_queue is not None
 
     logger.debug(f"Making a request to the OpenAI API:\n{json.dumps({'api_path': api_path, 'max_attempts': max_attempts, 'data': data}, indent=2)}")
+
+    api_request = asyncio.Event()
 
     total_api_attempts = 0
     while total_api_attempts < max_attempts:
       logger.info(f"API Attempt {total_api_attempts + 1} of 3")
+      # Wait until there is an available slot
+      # logger.debug("Waiting for an available slot & no rate limiting")
       await self._context.concurrent_lock.acquire()
-      await self._context.ratelimit_gate.wait()
+      # logger.debug(f"{self._context.concurrent_lock._value} slots available")
+      # await self._context.ratelimit_gate.wait()
+      # Submit a request to send the API a request & wait for approval
+      logger.debug("Submitting a request to send the API a request & waiting for approval")
+      api_request.clear()
+      await self._context.request_queue.put(api_request)
+      await api_request.wait()
+      # Send the request
+      # _req_opts = {'model': data['model'], 'max_tokens': data['max_tokens']}
+      # logger.debug(f"Sending the request: {_req_opts}")
+      logger.debug("Sending the request")
       try:
         async with self.session.post(
           api_path,
           json=data,
         ) as chat_resp:
           await _safe_raise_for_status(chat_resp)
+          logger.debug("Response Received")
           return await chat_resp.json() # type: ignore
       except HTTPError as e:
-        logger.error(f"Failed to get a response from the OpenAI API: {e.status} {e.message}\n{e.headers}")
+        logger.error(f"Failed to get a response from the OpenAI API: {e.status} {e.message}\n{json.dumps(e.headers, indent=2)}")
         # Handle Rate Limiting
         if e.status in (429,):
           logger.error(f"Rate Limited by the OpenAI API: {e.headers}")
@@ -431,7 +517,7 @@ class OpenAISessionManager:
           # Schedule a rate limit
           asyncio.create_task(self.rate_limit_requests(rl_wait_time))
           # Sleep to hand control back to the event loop
-          await asyncio.sleep(0)
+          await asyncio.sleep(10)
           # Rate limiting doesn't count towards our attempts
         # Raise the Error if it's our fault.
         elif e.status in (400, 401, 403, 404):
@@ -453,15 +539,13 @@ class OpenAISessionManager:
   async def embed(
     self,
     *text: str | Tokens,
-    tensor: np.ndarray | None = None,
-  ) -> np.ndarray:
+  ) -> np.ndarray[Any, np.dtype[np.float64]]:
     """Embed a batch of text
     Args:
       text (str | Tokens): A batch of text or already encoded Tokens to embed
-      tensor (np.ndarray | None): When provided, the embedding vector is stored in this tensor. The tensor must have the shape (len(text), dims) & dtype float32.
     
     Returns:
-      The embedding vector of size (len(text), dims) & dtype float32. If tensor is provided, the same tensor is returned.
+      The embedding vector of size (len(text), dims) & dtype float32.
     """
     assert self._context.is_held
     assert self.embedding_model is not None
@@ -470,14 +554,18 @@ class OpenAISessionManager:
     logger.debug("Embedding...")
 
     # Convert text into Tokens
+    _text: list[Tokens]
     if isinstance(text[0], str):
-      assert self._context.chat_tokenizer_manager is not None
+      assert self._context.embedding_tokenizer_manager is not None
       assert all(isinstance(t, str) for t in text)
-      text = await self._context.chat_tokenizer_manager.encode(*text) # type: ignore
+      _text = await self._context.embedding_tokenizer_manager.encode(*text) # type: ignore
     else:
-      text = list(text) # type: ignore
+      _text = list(text) # type: ignore
+    
+    assert all(isinstance(token, int) for token_list in _text for token in token_list)
+    assert len(_text) == len(text)
 
-    if len(text) < 0 or len(text) > self.embedding_model.model_context_window:
+    if len(_text) < 0 or len(_text) > self.embedding_model.model_context_window:
       err_msg = f"Text must be between 1 and {self.embedding_model.model_context_window} tokens long"
       logger.error(err_msg)
       raise ModelError(
@@ -485,31 +573,25 @@ class OpenAISessionManager:
         err_msg,
       )
 
-    logger.debug(f"Embedding a total of {sum(len(t) for t in text)} tokens")
+    logger.debug(f"Embedding a total of {sum(len(t) for t in _text)} tokens")
 
     # Create the embeddings
     api_response = await self._request(
       "/v1/embeddings",
       {
-        "input": text,
+        "model": self.embedding_model.model_id,
+        "input": _text,
       }
     )
     logger.debug(f"Embedding Response:\n{json.dumps(api_response, indent=2)}")
-
-    # Create a Tensor if one wasn't provided
-    if tensor is None:
-      logger.debug(f"Creating a new Tensor of shape {(len(text), self.embedding_model.vector_dimensions)}")
-      tensor = np.empty((len(text), self.embedding_model.vector_dimensions), dtype=np.float32)
-    
-    # Load the embeddings into the tensor
-    embedding_vectors = [d["embedding"] for d in api_response["data"]]
-    assert len(embedding_vectors) == len(text)
-    assert all(len(v) == self.embedding_model.vector_dimensions for v in embedding_vectors)
-
-    # TODO: Is there a more efficient way of doing this?
-    np.copyto(tensor, embedding_vectors)
-
-    return tensor
+   
+    return np.array(
+      [d["embedding"] for d in api_response["data"]],
+      dtype=np.float64
+    ).reshape(
+      len(_text),
+      self.embedding_model.vector_dimensions
+    )
 
   async def chat(
     self,
@@ -581,6 +663,7 @@ class OpenAISessionManager:
         },
       },
     )
+    multi_response: bool = len(api_response["choices"]) > 1
     unix_ts_ns = time.time_ns()
     chat_responses: list[ChatMessage] = [
       ChatMessage(
@@ -590,7 +673,8 @@ class OpenAISessionManager:
         metadata={ k:v for k, v in {
           "partial": None if reply_obj["finish_reason"] == "stop" else reply_obj["finish_reason"],
           "unix_ts_ns": unix_ts_ns,
-        }.items() if v is not None}
+          "reply": reply_obj["index"] + 1 if multi_response else None,
+        }.items() if v is not None }
       )
       for reply_obj in api_response["choices"]
     ]

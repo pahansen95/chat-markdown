@@ -289,7 +289,7 @@ def transpile_message_dict_to_ast(*messages: dict[str, str | dict[str, str]]) ->
   line = 1
   column = 1
   for msg in messages:
-    assert "metadata" in msg, "Message must contain metadata"
+    assert "metadata" in msg, f"Message must contain metadata: {json.dumps(msg)}"
     assert "content" in msg, "Message must contain content"
     assert isinstance(msg["metadata"], dict), "Metadata must be a dict"
     assert isinstance(msg["content"], str), "Content must be a string"
@@ -312,9 +312,7 @@ def transpile_ast_to_markdown(*nodes: Node) -> str:
       f"<!-- start {json.dumps(node.metadata.props)} -->\n",
       node.content.content.decode(node.content.encoding),
       f"\n<!-- end -->"
-    ])
-    for node in nodes
-    if isinstance(node, MessageNode)
+    ]) for node in nodes if isinstance(node, MessageNode)
   ])
 
 def _tests():
