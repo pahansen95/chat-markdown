@@ -54,7 +54,7 @@ OPENAI_MODEL_TUNING_PRESETS = {
   "creative": {
     "description": "Responses are more creative; the model is more curious.",
     "tuning": {
-      "temperature": 2.0,
+      "temperature": 1.5,
       "top_p": 0.95,
     }
   },
